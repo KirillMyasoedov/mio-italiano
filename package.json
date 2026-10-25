@@ -1,1 +1,25 @@
-{"name":"mio-italiano","private":true,"type":"module","scripts":{"start":"node server.js","test":"node --test"},"dependencies":{"web-push":"^3.6.7"},"engines":{"node":">=20"}}
+{
+  "name": "mio-italiano",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "push:check": "wrangler deploy --dry-run",
+    "push:login": "wrangler login --device --scopes account:read user:read workers_scripts:write",
+    "push:deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "miniflare": "^5.20261019.2-beta",
+    "wrangler": "^4.152.0"
+  },
+  "overrides": {
+    "undici": "^7.30.1"
+  }
+}

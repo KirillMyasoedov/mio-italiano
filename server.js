@@ -25,7 +25,7 @@ function persist() {
   });
   return writing;
 }
-const assets = new Set(['index.html','app.js','sw.js','manifest.webmanifest','icons/icon-192.png','icons/icon-512.png']);
+const assets = new Set(['index.html','app.js','reminders.js','push-config.js','sw.js','manifest.webmanifest','icons/icon-192.png','icons/icon-512.png']);
 const types = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.webmanifest':'application/manifest+json','.png':'image/png'};
 const server = http.createServer(async (request,response)=>{
   const send = (status,body) => {response.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});response.end(JSON.stringify(body))};

@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mio-italiano-reminders",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2026-10-25",
+  "workers_dev": true,
+  "vars": {
+    "ALLOWED_ORIGIN": "https://kirillmyasoedov.github.io"
+  },
+  "durable_objects": {
+    "bindings": [{"name": "REMINDERS", "class_name": "ReminderDevice"}]
+  },
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["ReminderDevice"]}]
+}
