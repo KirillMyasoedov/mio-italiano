@@ -1,0 +1,1 @@
+{"name":"mio-italiano","private":true,"type":"module","scripts":{"start":"node server.js","test":"node --test"},"dependencies":{"web-push":"^3.6.7"},"engines":{"node":">=20"}}
