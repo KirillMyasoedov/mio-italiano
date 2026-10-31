@@ -17,7 +17,7 @@ test('Cloudflare runtime persists device keys and executes alarms without an ope
   const options = {
     compatibilityDate: '2026-10-25',
     modulesRoot: fileURLToPath(new URL('..', import.meta.url)),
-    modules: ['cloudflare/worker.js', 'cloudflare/push.js', 'reminder-schedule.js'].map(path => ({type: 'ESModule', path: fileURLToPath(new URL('../' + path, import.meta.url))})),
+    modules: ['cloudflare/worker.js', 'cloudflare/push.js', 'reminder-schedule.js', 'review-activity.js'].map(path => ({type: 'ESModule', path: fileURLToPath(new URL('../' + path, import.meta.url))})),
     durableObjects: {REMINDERS: {className: 'ReminderDevice', useSQLite: true}},
     resourcePersistencePath: directory,
     bindings: {ALLOWED_ORIGIN: origin},
@@ -36,10 +36,14 @@ test('Cloudflare runtime persists device keys and executes alarms without an ope
     assert.ok(config.publicKey);
     assert.equal(config.testSupported, true);
     const subscription = {endpoint: 'https://fcm.googleapis.com/fcm/send/runtime-test', keys: {auth: 'auth', p256dh: 'key'}, applicationServerKey: config.publicKey};
-    const body = JSON.stringify({subscription, dues: [Date.now() - 1, Date.now() + 600000]});
+    const body = JSON.stringify({subscription, dues: [Date.now() - 1, Date.now() + 600000], activity: {clientId: 'runtime-tab',sequence:1,active:true}});
     const update = await runtime.dispatchFetch('https://worker.test/api/reminders', {method: 'PUT', headers, body});
     assert.equal(update.status, 200);
     assert.equal(update.headers.get('Access-Control-Allow-Origin'), origin);
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    assert.equal(delivered,0,'an open review must suppress the alarm');
+    const leave=await runtime.dispatchFetch('https://worker.test/api/activity',{method:'POST',headers,body:JSON.stringify({clientId:'runtime-tab',sequence:2,active:false})});
+    assert.equal(leave.status,200);
     let timeout;
     try { await Promise.race([received, new Promise((_, reject) => { timeout = setTimeout(() => reject(Error('Alarm did not fire')), 15000); })]); }
     finally { clearTimeout(timeout); }

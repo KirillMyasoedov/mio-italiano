@@ -4,6 +4,8 @@ let reminderConfig = null;
 let reminderSync = Promise.resolve();
 let reminderRetry = null;
 let remindersBusy = false;
+const reviewClientId = crypto.randomUUID();
+let reviewActivitySequence = 0;
 let reminderServer = localStorage.getItem('italiano_push_server') ?? window.ITALIANO_PUSH_SERVER ?? '';
 $('notificationServer').value = reminderServer;
 
@@ -25,13 +27,14 @@ function reminderToken() {
   }
   return token;
 }
-async function reminderRequest(path, method = 'GET', body) {
+async function reminderRequest(path, method = 'GET', body, keepalive = false) {
   const response = await fetch(new URL('api/' + path, reminderBase()), {
     method,
     headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + reminderToken()},
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: 'no-store',
     signal: AbortSignal.timeout(15000),
+    keepalive,
   });
   if (!response.ok) throw Error(response.status === 429 ? 'Подождите минуту перед следующей проверкой.' : 'Ошибка сервера: HTTP ' + response.status);
   return response.json();
@@ -52,7 +55,28 @@ function subscriptionBody(subscription) {
   return {
     subscription: {...subscription.toJSON(), applicationServerKey: reminderConfig.publicKey},
     dues: phrases.map(p => p.due).filter(d => d > 0),
+    ...(reminderConfig.activitySupported ? {activity: reviewActivity()} : {}),
   };
+}
+function reviewActivity() {
+  return {clientId: reviewClientId, sequence: ++reviewActivitySequence, active: reviewIsActive()};
+}
+async function clearReviewNotifications() {
+  if (!reviewIsActive() || !('serviceWorker' in navigator)) return;
+  try {
+    const registration = await reminderRegistration();
+    if (!reviewIsActive() || !registration.getNotifications) return;
+    for (const notification of await registration.getNotifications({tag: 'italiano-review'})) notification.close();
+  } catch {}
+}
+function updateReviewActivity(leaving = false) {
+  clearReviewNotifications();
+  if (!reminderEnabled() || !reminderConfig?.activitySupported) return;
+  const activity = reviewActivity();
+  if (leaving) activity.active = false;
+  // Send immediately, including when the page is being hidden. Sequence
+  // numbers prevent late requests from overriding a more recent transition.
+  return reminderRequest('activity', 'POST', activity, true).catch(() => {});
 }
 function syncReminders() {
   if (!reminderEnabled() || remindersBusy || !reminderConfig) return;
@@ -92,6 +116,7 @@ async function initReminders() {
       : 'Сервер подключён. Включите напоминания, чтобы получать их при закрытом приложении.';
     reminderButtons();
     syncReminders();
+    clearReviewNotifications();
   } catch (error) {
     $('notificationConnection').open = true;
     $('notificationStatus').textContent = 'Сервер напоминаний недоступен. Проверьте адрес и подключение к интернету. ' + error.message;
@@ -165,6 +190,9 @@ $('saveNotificationServer').onclick = async () => {
 };
 window.addEventListener('online', () => reminderConfig ? syncReminders() : initReminders());
 document.addEventListener('visibilitychange', () => {
+  updateReviewActivity();
   if (document.visibilityState === 'visible') reminderConfig ? syncReminders() : initReminders();
 });
+window.addEventListener('pagehide', () => updateReviewActivity(true));
+setInterval(() => { if (reviewIsActive()) updateReviewActivity(); }, 15000);
 window.addEventListener('load', initReminders);

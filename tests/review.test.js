@@ -4,11 +4,20 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {pendingDue,validSubscription} from '../reminder-schedule.js';
 function app(){
- const elements=new Map();
- const element=id=>{if(!elements.has(id))elements.set(id,{value:'',classList:{add(){},remove(){},toggle(){}},replaceChildren(){},append(){},style:{}});return elements.get(id)};
- const context=vm.createContext({document:{getElementById:element,querySelectorAll:()=>[],createElement:()=>element(Symbol())},localStorage:{getItem:()=>null,setItem(){}},crypto:{randomUUID:()=>String(Math.random())},window:{addEventListener(){}},navigator:{},location:{hash:''},setInterval(){},setTimeout(){},clearTimeout(){},console});
+ const elements=new Map(),events=new Map(),timers=[];
+ let now=1800000000000;
+ const element=id=>{if(!elements.has(id)){
+   const classes=new Set();
+   elements.set(id,{value:'',classList:{add(name){classes.add(name)},remove(name){classes.delete(name)},toggle(name,hidden){hidden?classes.add(name):classes.delete(name)},contains:name=>classes.has(name)},replaceChildren(){},append(){},style:{}});
+ }return elements.get(id)};
+ const tabs=['library','review','manage'].map(id=>({...element('tab-'+id),dataset:{tab:id},click(){this.onclick()}}));
+ const listen=(name,handler)=>{const handlers=events.get(name)||[];handlers.push(handler);events.set(name,handlers)};
+ const document={visibilityState:'visible',getElementById:element,querySelectorAll:()=>tabs,querySelector:()=>tabs[1],createElement:()=>element(Symbol()),addEventListener:listen};
+ const context=vm.createContext({document,Date:class extends Date{static now(){return now}},localStorage:{getItem:()=>null,setItem(){}},crypto:{randomUUID:()=>String(Math.random())},window:{addEventListener:listen},navigator:{serviceWorker:{addEventListener:listen}},location:{hash:'',protocol:'https:'},setInterval:callback=>timers.push(callback),setTimeout(){},clearTimeout(){},syncReminders(){},console});
  vm.runInContext(readFileSync(new URL('../app.js',import.meta.url),'utf8'),context);
- return code=>vm.runInContext(code,context);
+ const run=code=>vm.runInContext(code,context);
+ run.elements=elements;run.advance=ms=>{now+=ms};run.events=events;run.timers=timers;
+ return run;
 }
 test('practice repeats difficult phrases until easy, without mutating schedule',()=>{
  const run=app();
@@ -43,4 +52,43 @@ test('push endpoints reject local and arbitrary hosts',()=>{
  const sub=endpoint=>({endpoint,keys:{auth:'abc',p256dh:'xyz'}});
  assert.equal(validSubscription(sub('https://fcm.googleapis.com/fcm/send/token')),true);
  for(const url of ['http://fcm.googleapis.com/x','https://127.0.0.1/x','https://fcm.googleapis.com.evil.test/x','https://example.com/x'])assert.equal(validSubscription(sub(url)),false);
+});
+
+test('newly due phrases join the active queue without hiding the current answer',()=>{
+ const run=app();
+ run("phrases=[normalize({id:'first',due:0}),normalize({id:'later',due:Date.now()+1000})];openReview();$('showAnswer').onclick()");
+ assert.equal(run("$('answer').classList.contains('hidden')"),false);
+ run.advance(2000);run('refreshReviewQueue()');
+ assert.equal(run('reviewIds.length'),2);
+ assert.equal(run('current().id'),'first');
+ assert.equal(run("$('answer').classList.contains('hidden')"),false);
+ assert.equal(run("$('reviewPosition').textContent"),'1 / 2');
+ run('grade(2)');assert.equal(run('current().id'),'later');
+});
+test('forgotten phrases rejoin the queue when their next deadline arrives',()=>{
+ const run=app();run("phrases=[normalize({id:'again',due:0})];openReview();grade(0)");
+ assert.equal(run('current()'),undefined);
+ run.advance(60001);run.timers[0]();
+ assert.equal(run('current().id'),'again');
+ run('refreshReviewQueue();refreshReviewQueue()');
+ assert.equal(run('reviewIds.slice(reviewIndex).length'),1);
+});
+test('one notification click exposes all overdue phrases and subsequent pushes preserve the current card',()=>{
+ const run=app();run("phrases=[normalize({id:'a',due:0}),normalize({id:'b',due:0})]");
+ const message=run.events.get('message')[0];message({data:{type:'OPEN_REVIEW'}});
+ assert.equal(run('reviewIds.length'),2);
+ run("$('showAnswer').onclick()");
+ run("phrases.push(normalize({id:'c',due:0}))");message({data:{type:'REVIEW_DUE'}});
+ assert.equal(run('reviewIds.length'),3);
+ message({data:{type:'OPEN_REVIEW'}});
+ assert.equal(run("$('answer').classList.contains('hidden')"),false);
+ assert.equal(run('current().id'),'a');
+});
+test('background return refreshes due phrases and practice sessions keep their own queue',()=>{
+ const run=app();run("phrases=[normalize({id:'a',due:Date.now()+1000})];openReview()");
+ run.advance(2000);run.events.get('visibilitychange')[0]();assert.equal(run('current().id'),'a');
+ run('practiceOnly=true;resetReview();globalThis.original=JSON.stringify(reviewIds);phrases.push(normalize({id:"b",due:0}));refreshReviewQueue()');
+ assert.equal(run('JSON.stringify(reviewIds)===original'),true);
+ assert.equal(run('reviewIsActive()'),true);
+ run("document.visibilityState='hidden'");assert.equal(run('reviewIsActive()'),false);
 });

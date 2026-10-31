@@ -148,3 +148,38 @@ test('large dictionaries keep pending and delivered timestamps in bounded chunks
   assert.deepEqual(await object.parts('schedule'), []);
   assert.equal(state.alarm, null);
 });
+
+test('active review defers all deadlines, then groups overdue phrases after leaving', async t => {
+  const {object,call,state,subscription}=await setup();
+  const now=Date.now(),dues=[now-1000,now-500,now+600000];
+  const activity={clientId:'tab-a',sequence:1,active:true};
+  assert.equal((await call('reminders','PUT',{subscription,dues,activity})).status,200);
+  assert.ok(state.alarm>=now+44000);
+  let sent=0;const original=globalThis.fetch;
+  globalThis.fetch=async()=>{sent++;return new Response(null,{status:201})};
+  t.after(()=>{globalThis.fetch=original});
+  await object.alarm();assert.equal(sent,0);
+  assert.equal((await object.parts('schedule')).length,3);
+  await call('activity','POST',{...activity,sequence:2,active:false});
+  // An old full-schedule update cannot renew the previous active lease.
+  await call('reminders','PUT',{subscription,dues,activity});
+  assert.ok(state.alarm<Date.now()+2000);
+  await object.alarm();assert.equal(sent,1);
+  assert.deepEqual(await object.parts('schedule'),[dues[2]]);
+});
+
+test('closing another tab does not cancel an active review; expired leases resume pushes', async t => {
+  const {object,call,state,subscription}=await setup();
+  await call('reminders','PUT',{subscription,dues:[1]});
+  await call('activity','POST',{clientId:'tab-a',sequence:1,active:true});
+  await call('activity','POST',{clientId:'tab-b',sequence:1,active:false});
+  let sent=0;const original=globalThis.fetch;
+  globalThis.fetch=async()=>{sent++;return new Response(null,{status:201})};
+  t.after(()=>{globalThis.fetch=original});
+  await object.alarm();assert.equal(sent,0);
+  const record=await state.storage.get('record');
+  record.reviewClients['tab-a'].until=Date.now()-1;
+  await state.storage.put('record',record);
+  await object.alarm();assert.equal(sent,1);
+  assert.equal(state.alarm,null);
+});

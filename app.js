@@ -4,6 +4,7 @@ const starters=[['Scusi, non parlo bene italiano.','Извините, я пло�
 const $=id=>document.getElementById(id);
 function normalize(p,i){return {id:typeof p.id==='string'?p.id:crypto.randomUUID(),it:String(p.it||''),ru:String(p.ru||''),cat:String(p.cat||'Общение').slice(0,60),reps:Math.max(0,Number(p.reps)||0),interval:Math.max(0,Number(p.interval)||0),ease:Math.max(1.3,Number(p.ease)||2.5),due:Math.max(0,Number(p.due)||0),easyStreak:Math.max(0,Number(p.easyStreak)||0),lastGrade:[0,1,2,3].includes(p.lastGrade)?p.lastGrade:null,lapses:Math.max(0,Number(p.lapses)||0)}}
 function read(){try{let stored=JSON.parse(localStorage.getItem(KEY));if(Array.isArray(stored))return stored.map(normalize)}catch{}try{let old=JSON.parse(localStorage.getItem(OLD));if(Array.isArray(old))return old.map(normalize)}catch{}return starters.map(([it,ru])=>normalize({it,ru,cat:'Общение'}))}
+let activeTab='library';
 let phrases=read(), reviewIds=[],reviewIndex=0,practiceOnly=false,installPrompt=null,practicePool=new Map(),practiceTotal=0,practiceDone=0;
 function save(){try{localStorage.setItem(KEY,JSON.stringify(phrases));syncReminders()}catch{toast('Не удалось сохранить. Сделайте экспорт JSON.')}}
 function toast(msg){let t=$('toast');t.textContent=msg;t.style.display='block';clearTimeout(window._toastTimer);window._toastTimer=setTimeout(()=>t.style.display='none',2800)}
@@ -18,12 +19,25 @@ function pickPractice(previous){let entries=[...practicePool];if(entries.length>
 function resetReview(){if(practiceOnly){practicePool=new Map(phrases.filter(p=>p.easyStreak<3).map(p=>[p.id,practiceWeight(p)]));practiceTotal=practicePool.size;practiceDone=0;pickPractice()}else{reviewIds=dueList();reviewIndex=0}showReview()}
 
 function current(){return phrases.find(p=>p.id===reviewIds[reviewIndex])}
+function reviewIsActive(){return activeTab==='review'&&document.visibilityState==='visible'}
+function refreshReviewQueue(){
+  stats();
+  if(practiceOnly)return;
+  const previous=current()?.id,due=dueList(),dueSet=new Set(due);
+  const remaining=reviewIds.slice(reviewIndex).filter(id=>dueSet.has(id));
+  const queued=new Set(remaining);
+  for(const id of due)if(!queued.has(id)){remaining.push(id);queued.add(id)}
+  reviewIds=[...reviewIds.slice(0,reviewIndex),...remaining];
+  if(previous!==current()?.id)showReview();
+  else if(current())$('reviewPosition').textContent=(reviewIndex+1)+' / '+reviewIds.length;
+}
+
 function showReview(){stats();let p=current();if(!p){$('emptyTitle').textContent=practiceOnly?'Тренировка завершена! 🎉':'На сегодня всё! 🎉';$('emptyHint').textContent=practiceOnly?'Все фразы этой сессии отмечены как «Легко». Устойчиво выученные фразы пропущены.':'Следующие повторения появятся здесь, когда придёт время.';$('reviewCard').classList.add('hidden');$('reviewEmpty').classList.remove('hidden');return}$('reviewCard').classList.remove('hidden');$('reviewEmpty').classList.add('hidden');$('reviewStatus').textContent=practiceOnly?'Свободная тренировка':(p.reps?'Повторение':'Новая фраза');$('reviewPosition').textContent=practiceOnly?'Легко: '+practiceDone+' / '+practiceTotal:(reviewIndex+1)+' / '+reviewIds.length;$('question').textContent=p.ru;$('answerText').textContent=p.it;$('answer').classList.add('hidden');$('showAnswer').classList.remove('hidden')}
 function schedule(p,grade){p.lastGrade=grade;p.easyStreak=grade===3?p.easyStreak+1:0;let now=Date.now();if(grade===0){p.reps=0;p.interval=0;p.lapses++;p.ease=Math.max(1.3,p.ease-.2);p.due=now+MIN;return}if(grade===1){p.reps=Math.max(0,p.reps-1);p.interval=0;p.ease=Math.max(1.3,p.ease-.15);p.due=now+10*MIN;return}let previous=p.interval;p.reps++;if(previous<1){p.interval=grade===3?3:1}else if(previous<3){p.interval=grade===3?7:3}else{p.interval=Math.max(previous+1,Math.round(previous*p.ease*(grade===3?1.3:1)))}p.ease=Math.max(1.3,p.ease+(grade===3?.12:0));p.due=now+p.interval*DAY}
-function grade(g){let p=current();if(!p)return;if(!practiceOnly){schedule(p,g);save();reviewIndex++}else{if(g===3){practicePool.delete(p.id);practiceDone++}else practicePool.set(p.id,[8,4,2][g]);pickPractice(p.id)}showReview();renderLibrary()}
+function grade(g){let p=current();if(!p)return;if(!practiceOnly){schedule(p,g);save();reviewIndex++}else{if(g===3){practicePool.delete(p.id);practiceDone++}else practicePool.set(p.id,[8,4,2][g]);pickPractice(p.id)}if(!practiceOnly)refreshReviewQueue();showReview();renderLibrary()}
 $('showAnswer').onclick=()=>{$('answer').classList.remove('hidden');$('showAnswer').classList.add('hidden')};$('playAnswer').onclick=()=>{let p=current();if(p)speak(p.it)};$('again').onclick=()=>grade(0);$('hard').onclick=()=>grade(1);$('good').onclick=()=>grade(2);$('easy').onclick=()=>grade(3);
 $('practiceAny').onclick=()=>{practiceOnly=true;resetReview()};$('search').oninput=renderLibrary;
-document.querySelectorAll('[data-tab]').forEach(btn=>btn.onclick=()=>{for(let id of ['library','review','manage'])$(id).classList.toggle('hidden',id!==btn.dataset.tab);document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b===btn));if(btn.dataset.tab==='review'){practiceOnly=false;resetReview()}if(btn.dataset.tab==='library')renderLibrary()});
+document.querySelectorAll('[data-tab]').forEach(btn=>btn.onclick=()=>{activeTab=btn.dataset.tab;for(let id of ['library','review','manage'])$(id).classList.toggle('hidden',id!==btn.dataset.tab);document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b===btn));if(btn.dataset.tab==='review'){practiceOnly=false;resetReview()}if(btn.dataset.tab==='library')renderLibrary();if(typeof updateReviewActivity==='function')updateReviewActivity()});
 $('addForm').onsubmit=e=>{e.preventDefault();let it=$('newIt').value.trim(),ru=$('newRu').value.trim(),cat=$('newCat').value.trim()||'Мои фразы';if(!it||!ru)return;phrases.push(normalize({it,ru,cat}));save();e.target.reset();$('newCat').value='Мои фразы';renderLibrary();resetReview();toast('Фраза добавлена')};
 $('export').onclick=()=>{let blob=new Blob([JSON.stringify({version:2,phrases},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='il-mio-italiano-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)};
 $('import').onclick=()=>$('file').click();$('file').onchange=async e=>{let f=e.target.files[0];if(!f)return;try{let obj=JSON.parse(await f.text()),items=Array.isArray(obj)?obj:obj.phrases;if(!Array.isArray(items)||items.length>10000||!items.every(p=>p&&typeof p.it==='string'&&typeof p.ru==='string'&&p.it.length<=2000&&p.ru.length<=2000))throw Error('Invalid');if(!confirm('Заменить текущий словарь импортированным?'))return;phrases=items.map(normalize);save();renderLibrary();resetReview();toast('Импорт завершён')}catch{toast('Неверный формат резервной копии')}finally{e.target.value=''}};
@@ -32,7 +46,9 @@ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installProm
 if('serviceWorker'in navigator&&location.protocol.startsWith('http'))window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 renderLibrary();resetReview();
 
-setInterval(()=>{stats();if(!practiceOnly&&!current())resetReview()},15000);
-function openReview(){document.querySelector('[data-tab="review"]').click()}
-navigator.serviceWorker?.addEventListener('message',e=>{if(e.data?.type==='OPEN_REVIEW')openReview()});
+setInterval(refreshReviewQueue,5000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshReviewQueue()});
+window.addEventListener('focus',refreshReviewQueue);
+function openReview(){if(activeTab==='review'&&!practiceOnly){refreshReviewQueue();if(typeof updateReviewActivity==='function')updateReviewActivity()}else document.querySelector('[data-tab="review"]').click()}
+navigator.serviceWorker?.addEventListener('message',e=>{if(e.data?.type==='OPEN_REVIEW')openReview();if(e.data?.type==='REVIEW_DUE'){refreshReviewQueue();if(typeof updateReviewActivity==='function')updateReviewActivity()}});
 if(location.hash==='#review')openReview();

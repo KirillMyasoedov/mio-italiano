@@ -1,5 +1,6 @@
 import {validSubscription, pendingDue} from '../reminder-schedule.js';
 import {generateKeys, matchesKey, sendPush} from './push.js';
+import {applyReviewActivity, reviewActiveUntil} from '../review-activity.js';
 
 const json = (value, status = 200) => Response.json(value, {status, headers: {'Cache-Control': 'no-store'}});
 const MAX_BODY = 250000;
@@ -22,13 +23,13 @@ export default {
       for (const [key, value] of Object.entries(cors)) result.headers.set(key, value);
       return result;
     };
-    if (!['/api/push-config', '/api/reminders', '/api/test'].includes(path)) return finish(json({error: 'Not found'}, 404));
+    if (!['/api/push-config', '/api/reminders', '/api/test', '/api/activity'].includes(path)) return finish(json({error: 'Not found'}, 404));
     if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors});
     const token = request.headers.get('Authorization')?.match(/^Bearer ([a-zA-Z0-9-]{64,100})$/)?.[1];
     if (!token) return finish(json({error: 'Device token required'}, 401));
     if ((path === '/api/push-config' && request.method !== 'GET') ||
         (path === '/api/reminders' && !['PUT', 'DELETE'].includes(request.method)) ||
-        (path === '/api/test' && request.method !== 'POST')) return finish(json({error: 'Method not allowed'}, 405));
+        (['/api/test', '/api/activity'].includes(path) && request.method !== 'POST')) return finish(json({error: 'Method not allowed'}, 405));
     if (['PUT', 'POST'].includes(request.method)) {
       if (!request.headers.get('Content-Type')?.startsWith('application/json')) return finish(json({error: 'JSON required'}, 415));
       // Bound the stream as well as Content-Length, which is not always sent.
@@ -67,7 +68,7 @@ export class ReminderDevice {
       if (path === '/api/push-config') {
         let keys = await this.ctx.storage.get('keys');
         if (!keys) { keys = await generateKeys(); await this.ctx.storage.put('keys', keys); }
-        return json({publicKey: keys.publicKey, testSupported: true});
+        return json({publicKey: keys.publicKey, testSupported: true, activitySupported: true});
       }
       if (request.method === 'DELETE') {
         // Keep the VAPID key so re-enabling doesn't require a new browser key.
@@ -78,6 +79,13 @@ export class ReminderDevice {
       let input;
       try { input = await request.json(); } catch { return json({error: 'Invalid JSON'}, 400); }
       let record = await this.ctx.storage.get('record');
+      if (path === '/api/activity') {
+        if (!record?.subscription) return json({});
+        if (!applyReviewActivity(record, input)) return json({error: 'Invalid review activity'}, 400);
+        await this.ctx.storage.put('record', record);
+        await this.setNextAlarm(record);
+        return json({});
+      }
       if (path === '/api/test') {
         if (!record?.subscription) return json({error: 'Enable notifications first'}, 409);
         if (record.testRequestedAt && Date.now() - record.testRequestedAt < 60000) return json({error: 'Wait a minute before another test'}, 429);
@@ -98,6 +106,7 @@ export class ReminderDevice {
       // schedule. Store chunks below the storage API's per-value size limit.
       const unique = [...new Set(dues)].sort((a, b) => a - b);
       record = {...record, subscription, failures: 0};
+      if (input.activity !== undefined && !applyReviewActivity(record, input.activity)) return json({error: 'Invalid review activity'}, 400);
       const acknowledged = unique.filter(d => delivered.has(d));
       const schedule = unique.filter(d => !delivered.has(d));
       await this.ctx.storage.put({record, 'schedule-a': schedule.slice(0, 5000), 'schedule-b': schedule.slice(5000),
@@ -114,7 +123,7 @@ export class ReminderDevice {
 
   async setNextAlarm(record, schedule) {
     schedule ??= await this.parts('schedule');
-    const next = Math.min(...schedule, record.testDue || Infinity);
+    const next = Math.max(Math.min(...schedule, record.testDue || Infinity), reviewActiveUntil(record));
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, next));
     else await this.ctx.storage.deleteAlarm();
   }
@@ -126,6 +135,10 @@ export class ReminderDevice {
       if (!record?.subscription) return;
       const schedule = await this.parts('schedule');
       const now = Date.now();
+      if (reviewActiveUntil(record) > now) {
+        await this.setNextAlarm(record, schedule);
+        return;
+      }
       const due = pendingDue(schedule, [], now);
       if (!due.length && !(record.testDue && record.testDue <= now)) {
         await this.setNextAlarm(record, schedule);

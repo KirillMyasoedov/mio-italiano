@@ -27,14 +27,16 @@ function app(server = '') {
     localStorage: {getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)},
     window: {ITALIANO_PUSH_SERVER: server, addEventListener() {}, Notification: true, PushManager: true},
     Notification: {permission: 'granted', requestPermission: async () => 'granted'},
-    document: {addEventListener() {}},
+    document: {visibilityState: 'visible', addEventListener() {}},
+    reviewIsActive: () => false,
     navigator: {serviceWorker: {ready: Promise.resolve(registration)}},
     location: {href: 'https://kirillmyasoedov.github.io/mio-italiano/', hostname: 'kirillmyasoedov.github.io'},
     URL, crypto, atob, AbortSignal, console,
     setTimeout: (task, ms) => { const id = Math.random(); timers.set(id, {task, ms}); return id; },
     clearTimeout: id => timers.delete(id),
+    setInterval() {},
     phrases: [{due: 100}, {due: 0}],
-    fetch: async (url, options) => { requests.push({url: String(url), options}); return Response.json(String(url).endsWith('push-config') ? {publicKey, testSupported: true} : {}); },
+    fetch: async (url, options) => { requests.push({url: String(url), options}); return Response.json(String(url).endsWith('push-config') ? {publicKey, testSupported: true, activitySupported: true} : {}); },
   });
   vm.runInContext(readFileSync(new URL('../reminders.js', import.meta.url), 'utf8'), context);
   return {run: code => vm.runInContext(code, context), values, requests, elements, timers, get unsubscribed() { return unsubscribed; }};
@@ -93,4 +95,16 @@ test('a failed schedule sync retries while preserving enabled state', async () =
   assert.equal(values.get('italiano_push_enabled'), '1');
   assert.equal([...timers.values()].some(timer => timer.ms === 30000), true);
   assert.match(elements.get('notificationStatus').textContent, /пока не обновлено/);
+});
+
+test('foreground activity uses keepalive, sequence numbers and the current tab state', async () => {
+  const {run,elements,requests}=app('https://italiano.example.workers.dev');
+  await run('initReminders()');await elements.get('enableNotifications').onclick();await run('reminderSync');
+  run('reviewIsActive=()=>true');await run('updateReviewActivity()');
+  let request=requests.at(-1),active=JSON.parse(request.options.body);
+  assert.equal(request.url,'https://italiano.example.workers.dev/api/activity');
+  assert.equal(request.options.keepalive,true);assert.equal(active.active,true);
+  await run('updateReviewActivity(true)');
+  const inactive=JSON.parse(requests.at(-1).options.body);
+  assert.equal(inactive.active,false);assert.equal(inactive.clientId,active.clientId);assert.ok(inactive.sequence>active.sequence);
 });
